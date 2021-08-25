@@ -1,4 +1,5 @@
 discovery:
+  dimensionLabelPrefix: ""
   exportedTagsOnMetrics:
     ebs:
       - VolumeId

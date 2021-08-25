@@ -11,7 +11,7 @@ func UpdateMetrics(config ScrapeConf, registry *prometheus.Registry, now time.Ti
 	tagsData, cloudwatchData, endtime := scrapeAwsData(config, now, metricsPerQuery, fips, floatingTimeWindow, cloudwatchSemaphore, tagSemaphore)
 	var metrics []*PrometheusMetric
 
-	metrics = append(metrics, migrateCloudwatchToPrometheus(cloudwatchData, labelsSnakeCase)...)
+	metrics = append(metrics, migrateCloudwatchToPrometheus(cloudwatchData, labelsSnakeCase, config.Discovery.DimensionLabelPrefix)...)
 	metrics = ensureLabelConsistencyForMetrics(metrics)
 
 	metrics = append(metrics, migrateTagsToPrometheus(tagsData, labelsSnakeCase)...)
