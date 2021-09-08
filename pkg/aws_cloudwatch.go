@@ -376,7 +376,7 @@ func createPrometheusLabels(cwd *cloudwatchData, labelsSnakeCase bool, dimension
 		if dimensionLabelPrefix != nil {
 			labels[*dimensionLabelPrefix+promStringTag(*dimension.Name, labelsSnakeCase)] = *dimension.Value
 		} else {
-			labels[promStringTag(*dimension.Name, labelsSnakeCase)] = *dimension.Value
+			labels["dimension_"+promStringTag(*dimension.Name, labelsSnakeCase)] = *dimension.Value
 		}
 	}
 
