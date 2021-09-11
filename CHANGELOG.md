@@ -1,3 +1,40 @@
+# 0.30.0-alpha
+* *BREAKING* Introduce new version field to config file (jylitalo)
+```
+# Before
+discovery:
+  jobs:
+# After
+apiVersion: v1alpha1
+discovery:
+  jobs:
+```
+* [BUG] Fix issues with nilToZero (eminugurkenar)
+* [BUG] Fix race condition setting end time for discovery jobs (cristiangreco)
+* Simplify session creation code (jylitalo)
+* Major improvement of aws discovery code (jylitalo)
+* Major rewrite of the async scraping logic (rabunkosar-dd)
+* Add support for AWS/ElasticBeanstalk (andyzasl)
+* Upgrade golang to 1.17
+* Upgrade golang libraries to newest versions
+
+# 0.29.0-alpha
+Okay, private things settled. We have a new organisation for
+the project. Lets boost it and get the open PRs merged!
+This version is like 0.28.0-alpha but docker images hosted on ghcr.io
+and published via new github organisation nerdswords. Find
+details [here](https://medium.com/@IT_Supertramp/reorganizing-yace-79d7149b9584).
+
+Thanks to all there waiting and using the product! :)
+
+- *BREAKING CHANGE* Using a new docker registry / organisation:
+```yaml
+# Before
+quay.io/invisionag/yet-another-cloudwatch-exporter:v0.29.0-alpha
+# Now
+ghcr.io/nerdswords/yet-another-cloudwatch-exporter:v0.29.0-alpha
+```
+
 # 0.28.0-alpha
 Sorry folks, I currently struggle a little bit
 to get things merged fast due to a lot of private
