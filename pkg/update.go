@@ -41,7 +41,7 @@ func UpdateMetrics(
 	}
 	metrics = ensureLabelConsistencyForMetrics(metrics, observedMetricLabels)
 
-	metrics = append(metrics, migrateTagsToPrometheus(tagsData, labelsSnakeCase)...)
+	metrics = append(metrics, migrateTagsToPrometheus(tagsData, labelsSnakeCase, config.DimensionLabelPrefix)...)
 
 	registry.MustRegister(NewPrometheusCollector(metrics))
 }

@@ -18,9 +18,11 @@ type ScrapeConf struct {
 	StsRegion  string    `yaml:"sts-region"`
 	Discovery  Discovery `yaml:"discovery"`
 	Static     []*Static `yaml:"static"`
+    DimensionLabelPrefix *string   `yaml:"dimensionLabelPrefix"`
 }
 
 type Discovery struct {
+    DimensionLabelPrefix  *string               `yaml:"dimensionLabelPrefix"`
 	ExportedTagsOnMetrics exportedTagsOnMetrics `yaml:"exportedTagsOnMetrics"`
 	Jobs                  []*Job                `yaml:"jobs"`
 }
