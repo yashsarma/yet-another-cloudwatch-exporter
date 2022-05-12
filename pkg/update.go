@@ -34,7 +34,7 @@ func UpdateMetrics(
 		cache,
 	)
 
-	metrics, observedMetricLabels, err := migrateCloudwatchToPrometheus(cloudwatchData, labelsSnakeCase, observedMetricLabels)
+	metrics, observedMetricLabels, err := migrateCloudwatchToPrometheus(cloudwatchData, labelsSnakeCase, observedMetricLabels, config.DimensionLabelPrefix)
 	if err != nil {
 		log.Printf("Error migrating cloudwatch metrics to prometheus metrics: %s\n", err.Error())
 		return

@@ -14,13 +14,15 @@ const defaultLengthSeconds = int64(300)
 const defaultDelaySeconds = int64(300)
 
 type ScrapeConf struct {
-	ApiVersion string    `yaml:"apiVersion"`
-	StsRegion  string    `yaml:"sts-region"`
-	Discovery  Discovery `yaml:"discovery"`
-	Static     []*Static `yaml:"static"`
+	ApiVersion           string    `yaml:"apiVersion"`
+	StsRegion            string    `yaml:"sts-region"`
+	Discovery            Discovery `yaml:"discovery"`
+	Static               []*Static `yaml:"static"`
+	DimensionLabelPrefix *string   `yaml:"dimensionLabelPrefix"`
 }
 
 type Discovery struct {
+	DimensionLabelPrefix  *string               `yaml:"dimensionLabelPrefix"`
 	ExportedTagsOnMetrics exportedTagsOnMetrics `yaml:"exportedTagsOnMetrics"`
 	Jobs                  []*Job                `yaml:"jobs"`
 }
