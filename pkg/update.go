@@ -4,11 +4,10 @@ import (
 	"context"
 
 	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
 )
 
 // Metrics is a slice of prometheus metrics specific to the scraping process such API call counters
-var Metrics = []prometheus.Collector{cloudwatchAPICounter, cloudwatchAPIErrorCounter, cloudwatchGetMetricDataAPICounter, cloudwatchGetMetricStatisticsAPICounter, resourceGroupTaggingAPICounter, autoScalingAPICounter, targetGroupsAPICounter, apiGatewayAPICounter, ec2APICounter, dmsAPICounter}
+var Metrics = []prometheus.Collector{cloudwatchAPICounter, cloudwatchAPIErrorCounter, cloudwatchGetMetricDataAPICounter, cloudwatchGetMetricStatisticsAPICounter, resourceGroupTaggingAPICounter, autoScalingAPICounter, targetGroupsAPICounter, apiGatewayAPICounter, ec2APICounter, dmsAPICounter, storagegatewayAPICounter}
 
 type LabelSet map[string]struct{}
 
@@ -24,6 +23,7 @@ func UpdateMetrics(
 	cloudwatchSemaphore, tagSemaphore chan struct{},
 	cache SessionCache,
 	observedMetricLabels map[string]LabelSet,
+	logger Logger,
 ) {
 	tagsData, cloudwatchData := scrapeAwsData(
 		ctx,
@@ -32,11 +32,12 @@ func UpdateMetrics(
 		cloudwatchSemaphore,
 		tagSemaphore,
 		cache,
+		logger,
 	)
 
 	metrics, observedMetricLabels, err := migrateCloudwatchToPrometheus(cloudwatchData, labelsSnakeCase, observedMetricLabels, config.DimensionLabelPrefix)
 	if err != nil {
-		log.Printf("Error migrating cloudwatch metrics to prometheus metrics: %s\n", err.Error())
+		logger.Error(err, "Error migrating cloudwatch metrics to prometheus metrics")
 		return
 	}
 	metrics = ensureLabelConsistencyForMetrics(metrics, observedMetricLabels)
@@ -44,4 +45,13 @@ func UpdateMetrics(
 	metrics = append(metrics, migrateTagsToPrometheus(tagsData, labelsSnakeCase)...)
 
 	registry.MustRegister(NewPrometheusCollector(metrics))
+}
+
+type Logger interface {
+	Info(message string, keyvals ...interface{})
+	Debug(message string, keyvals ...interface{})
+	Error(err error, message string, keyvals ...interface{})
+	Warn(message string, keyvals ...interface{})
+	With(keyvals ...interface{}) Logger
+	IsDebugEnabled() bool
 }

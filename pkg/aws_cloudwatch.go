@@ -14,8 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var percentile = regexp.MustCompile(`^p(\d{1,2}(\.\d{0,2})?|100)$`)
@@ -24,6 +22,7 @@ const timeFormat = "2006-01-02T15:04:05.999999-07:00"
 
 type cloudwatchInterface struct {
 	client cloudwatchiface.CloudWatchAPI
+	logger Logger
 }
 
 type cloudwatchData struct {
@@ -45,7 +44,7 @@ type cloudwatchData struct {
 	Period                  int64
 }
 
-func createGetMetricStatisticsInput(dimensions []*cloudwatch.Dimension, namespace *string, metric *Metric) (output *cloudwatch.GetMetricStatisticsInput) {
+func createGetMetricStatisticsInput(dimensions []*cloudwatch.Dimension, namespace *string, metric *Metric, logger Logger) (output *cloudwatch.GetMetricStatisticsInput) {
 	period := metric.Period
 	length := metric.Length
 	delay := metric.Delay
@@ -73,7 +72,7 @@ func createGetMetricStatisticsInput(dimensions []*cloudwatch.Dimension, namespac
 		ExtendedStatistics: extendedStatistics,
 	}
 
-	log.Debug("CLI helper - " +
+	logger.Debug("CLI helper - " +
 		"aws cloudwatch get-metric-statistics" +
 		" --metric-name " + metric.Name +
 		" --dimensions " + dimensionsToCliString(dimensions) +
@@ -83,7 +82,7 @@ func createGetMetricStatisticsInput(dimensions []*cloudwatch.Dimension, namespac
 		" --start-time " + startTime.Format(time.RFC3339) +
 		" --end-time " + endTime.Format(time.RFC3339))
 
-	log.Debug(*output)
+	logger.Debug("createGetMetricStatisticsInput", "output", *output)
 	return output
 }
 
@@ -94,10 +93,10 @@ func findGetMetricDataById(getMetricDatas []cloudwatchData, value string) (cloud
 			return getMetricData, nil
 		}
 	}
-	return g, fmt.Errorf("Metric with id %s not found", value)
+	return g, fmt.Errorf("metric with id %s not found", value)
 }
 
-func createGetMetricDataInput(getMetricData []cloudwatchData, namespace *string, length int64, delay int64, configuredRoundingPeriod *int64) (output *cloudwatch.GetMetricDataInput) {
+func createGetMetricDataInput(getMetricData []cloudwatchData, namespace *string, length int64, delay int64, configuredRoundingPeriod *int64, logger Logger) (output *cloudwatch.GetMetricDataInput) {
 	var metricsDataQuery []*cloudwatch.MetricDataQuery
 	roundingPeriod := defaultPeriodSeconds
 	for _, data := range getMetricData {
@@ -130,8 +129,7 @@ func createGetMetricDataInput(getMetricData []cloudwatchData, namespace *string,
 		time.Duration(roundingPeriod)*time.Second,
 		time.Duration(length)*time.Second,
 		time.Duration(delay)*time.Second)
-	log.Debug("GetMetricData start time: ", startTime.Format(timeFormat))
-	log.Debug("GetMetricData end time: ", endTime.Format(timeFormat))
+	logger.Debug("GetMetricData Window", "start_time", startTime.Format(timeFormat), "end_time", endTime.Format(timeFormat))
 
 	dataPointOrder := "TimestampDescending"
 	output = &cloudwatch.GetMetricDataInput{
@@ -199,17 +197,17 @@ func dimensionsToCliString(dimensions []*cloudwatch.Dimension) (output string) {
 func (iface cloudwatchInterface) get(ctx context.Context, filter *cloudwatch.GetMetricStatisticsInput) []*cloudwatch.Datapoint {
 	c := iface.client
 
-	log.Debug(filter)
+	iface.logger.Debug("GetMetricStatistics", "input", filter)
 
 	resp, err := c.GetMetricStatisticsWithContext(ctx, filter)
 
-	log.Debug(resp)
+	iface.logger.Debug("GetMetricStatistics", "output", resp)
 
 	cloudwatchAPICounter.Inc()
 	cloudwatchGetMetricStatisticsAPICounter.Inc()
 
 	if err != nil {
-		log.Warningf("Unable to get metric statistics due to %v", err)
+		iface.logger.Error(err, "Failed to get metric statistics")
 		return nil
 	}
 
@@ -221,8 +219,8 @@ func (iface cloudwatchInterface) getMetricData(ctx context.Context, filter *clou
 
 	var resp cloudwatch.GetMetricDataOutput
 
-	if log.IsLevelEnabled(log.DebugLevel) {
-		log.Println(filter)
+	if iface.logger.IsDebugEnabled() {
+		iface.logger.Debug("GetMetricData", "input", filter)
 	}
 
 	// Using the paged version of the function
@@ -234,12 +232,12 @@ func (iface cloudwatchInterface) getMetricData(ctx context.Context, filter *clou
 			return !lastPage
 		})
 
-	if log.IsLevelEnabled(log.DebugLevel) {
-		log.Println(resp)
+	if iface.logger.IsDebugEnabled() {
+		iface.logger.Debug("GetMetricData", "output", resp)
 	}
 
 	if err != nil {
-		log.Warningf("Unable to get metric data due to %v", err)
+		iface.logger.Error(err, "Failed to get metric data")
 		return nil
 	}
 	return &resp
@@ -274,7 +272,7 @@ func getFullMetricsList(ctx context.Context, namespace string, metric *Metric, c
 	return &res, nil
 }
 
-func getFilteredMetricDatas(region string, accountId *string, namespace string, customTags []Tag, tagsOnMetrics exportedTagsOnMetrics, dimensionRegexps []*string, resources []*taggedResource, metricsList []*cloudwatch.Metric, m *Metric) (getMetricsData []cloudwatchData) {
+func getFilteredMetricDatas(region string, accountId *string, namespace string, customTags []Tag, tagsOnMetrics exportedTagsOnMetrics, dimensionRegexps []*string, resources []*taggedResource, metricsList []*cloudwatch.Metric, dimensionNameList []string, m *Metric) (getMetricsData []cloudwatchData) {
 	type filterValues map[string]*taggedResource
 	dimensionsFilter := make(map[string]filterValues)
 	for _, dr := range dimensionRegexps {
@@ -306,6 +304,15 @@ func getFilteredMetricDatas(region string, accountId *string, namespace string, 
 			ARN:       "global",
 			Namespace: namespace,
 		}
+		if len(dimensionNameList) > 0 && !metricDimensionsMatchNames(cwMetric, dimensionNameList) {
+			continue
+		}
+
+		/**
+		This loop takes a list of dimensions for an individual metric returned from AWS ResourceGroupsTaggingApi#GetResources.
+		It filters those dimensions against a user-supplied list of dimensions by name and value, and if they match,
+		adds the metric to a list of metrics to have its values retrieved.
+		*/
 		for _, dimension := range cwMetric.Dimensions {
 			if dimensionFilterValues, ok := dimensionsFilter[*dimension.Name]; ok {
 				if d, ok := dimensionFilterValues[*dimension.Value]; !ok {
@@ -317,8 +324,12 @@ func getFilteredMetricDatas(region string, accountId *string, namespace string, 
 					alreadyFound = true
 					r = d
 				}
+			} else {
+				skip = true
+				break
 			}
 		}
+
 		if !skip {
 			for _, stats := range m.Statistics {
 				id := fmt.Sprintf("id_%d", rand.Int())
@@ -342,6 +353,25 @@ func getFilteredMetricDatas(region string, accountId *string, namespace string, 
 		}
 	}
 	return getMetricsData
+}
+
+func metricDimensionsMatchNames(metric *cloudwatch.Metric, dimensionNameRequirements []string) bool {
+	if len(dimensionNameRequirements) != len(metric.Dimensions) {
+		return false
+	}
+	for _, dimension := range metric.Dimensions {
+		foundMatch := false
+		for _, dimensionName := range dimensionNameRequirements {
+			if *dimension.Name == dimensionName {
+				foundMatch = true
+				break
+			}
+		}
+		if !foundMatch {
+			return false
+		}
+	}
+	return true
 }
 
 func createPrometheusLabels(cwd *cloudwatchData, labelsSnakeCase bool, dimensionLabelPrefix *string) map[string]string {

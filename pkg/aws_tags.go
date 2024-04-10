@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2/ec2iface"
 	"github.com/aws/aws-sdk-go/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go/service/resourcegroupstaggingapi/resourcegroupstaggingapiiface"
-	log "github.com/sirupsen/logrus"
+	"github.com/aws/aws-sdk-go/service/storagegateway/storagegatewayiface"
 )
 
 // taggedResource is an AWS resource with tags
@@ -77,12 +78,13 @@ func (r taggedResource) metricTags(tagsOnMetrics exportedTagsOnMetrics) []Tag {
 
 // https://docs.aws.amazon.com/sdk-for-go/api/service/resourcegroupstaggingapi/resourcegroupstaggingapiiface/
 type tagsInterface struct {
-	account          string
-	client           resourcegroupstaggingapiiface.ResourceGroupsTaggingAPIAPI
-	asgClient        autoscalingiface.AutoScalingAPI
-	apiGatewayClient apigatewayiface.APIGatewayAPI
-	ec2Client        ec2iface.EC2API
-	dmsClient        databasemigrationserviceiface.DatabaseMigrationServiceAPI
+	client               resourcegroupstaggingapiiface.ResourceGroupsTaggingAPIAPI
+	asgClient            autoscalingiface.AutoScalingAPI
+	apiGatewayClient     apigatewayiface.APIGatewayAPI
+	ec2Client            ec2iface.EC2API
+	dmsClient            databasemigrationserviceiface.DatabaseMigrationServiceAPI
+	storagegatewayClient storagegatewayiface.StorageGatewayAPI
+	logger               Logger
 }
 
 func (iface tagsInterface) get(ctx context.Context, job *Job, region string) ([]*taggedResource, error) {
@@ -92,6 +94,7 @@ func (iface tagsInterface) get(ctx context.Context, job *Job, region string) ([]
 	if len(svc.ResourceFilters) > 0 {
 		inputparams := &resourcegroupstaggingapi.GetResourcesInput{
 			ResourceTypeFilters: svc.ResourceFilters,
+			ResourcesPerPage:    aws.Int64(100), // max allowed value according to API docs
 		}
 		c := iface.client
 		pageNum := 0
@@ -101,7 +104,7 @@ func (iface tagsInterface) get(ctx context.Context, job *Job, region string) ([]
 			resourceGroupTaggingAPICounter.Inc()
 
 			if len(page.ResourceTagMappingList) == 0 {
-				log.Errorf("Resource tag list is empty (in %s). Tags must be defined for %s to be discovered.", iface.account, job.Type)
+				iface.logger.Error(errors.New("resource tag list is empty"), "Account contained no tagged resource. Tags must be defined for resources to be discovered.")
 			}
 
 			for _, resourceTagMapping := range page.ResourceTagMappingList {
@@ -118,10 +121,10 @@ func (iface tagsInterface) get(ctx context.Context, job *Job, region string) ([]
 				if resource.filterThroughTags(job.SearchTags) {
 					resources = append(resources, &resource)
 				} else {
-					log.Debugf("Skipping resource %s because search tags do not match", resource.ARN)
+					iface.logger.Debug("Skipping resource because search tags do not match", "arn", resource.ARN)
 				}
 			}
-			return pageNum < 100
+			return !lastPage
 		})
 		if err != nil {
 			return nil, err

@@ -72,6 +72,7 @@ We will contact you as soon as possible.
   * nfw (AWS/NetworkFirewall) - Network Firewall
   * ngw (AWS/NATGateway) - NAT Gateway
   * lambda (AWS/Lambda) - Lambda Functions
+  * mediatailor (AWS/MediaTailor) - AWS Elemental MediaTailor
   * mq (AWS/AmazonMQ) - Managed Message Broker Service
   * neptune (AWS/Neptune) - Neptune
   * nlb (AWS/NetworkELB) - Network Load Balancer
@@ -85,6 +86,7 @@ We will contact you as soon as possible.
   * ses (AWS/SES) - Simple Email Service
   * shield (AWS/DDoSProtection) - Distributed Denial of Service (DDoS) protection service
   * sqs (AWS/SQS) - Simple Queue Service
+  * storagegateway (AWS/StorageGateway) - On-premises access to cloud storage
   * tgw (AWS/TransitGateway) - Transit Gateway
   * vpn (AWS/VPN) - VPN connection
   * asg (AWS/AutoScaling) - Auto Scaling Group
@@ -150,6 +152,7 @@ Note: Only [tagged resources](https://docs.aws.amazon.com/general/latest/gr/aws_
 | roundingPeriod         | Specifies how the current time is rounded before calculating start/end times for CloudWatch GetMetricData requests. This rounding is optimize performance of the CloudWatch request. This setting only makes sense to use if, for example, you specify a very long period (such as 1 day) but want your times rounded to a shorter time (such as 5 minutes).  to For example, a value of 300 will round the current time to the nearest 5 minutes. If not specified, the roundingPeriod defaults to the same value as shortest period in the job.                     |
 | addCloudwatchTimestamp | Export the metric with the original CloudWatch timestamp (General Setting for all metrics in this job)   |
 | customTags             | Custom tags to be added as a list of Key/Value pairs                                                     |
+| dimensionNameRequirements | List of metric dimensions to query. Before querying metric values, the total list of metrics will be filtered to only those that contain exactly this list of dimensions. An empty or undefined list results in all dimension combinations being included. |
 | metrics                | List of metric definitions                                                                               |
 
 searchTags example:
@@ -481,6 +484,9 @@ The following IAM permissions are required to discover tagged Database Migration
 "dms:DescribeReplicationTasks"
 ```
 
+## EC2 and STS Assume Role
+YACE will automatically attempt to assume the role associated with a machine within EC2. If this is undesirable behavior turn off the use of the use of metadata endpoint by setting the environment variable `AWS_EC2_METADATA_DISABLED=true`.
+
 ## Running locally
 
 ```shell
@@ -499,7 +505,11 @@ docker run -d --rm -v $PWD/credentials:/exporter/.aws/credentials -v $PWD/config
 ```
 
 ## Kubernetes Installation
+### Install with HELM
+* [README](charts/yet-another-cloudwatch-exporter/README.md)
 
+
+### Install with manifests
 ```yaml
 ---
 apiVersion: v1
@@ -602,6 +612,9 @@ The entrypoint to use YACE as a library is the `UpdateMetrics` func in [update.g
   - Prometheus requires that all metrics exported with the same key have the same labels
   - This map will track all labels observed and ensure they are exported on all metrics with the same key in the provided `registry`
   - You should provide the same instance of this map if you intend to re-use the `registry` between calls
+- `logger`
+  - Any implementation of the [Logger Interface](./pkg/update.go#L50)
+  - `exporter.NewLogrusLogger(log.StandardLogger())` is an acceptable default
 
 The update definition also includes an exported slice of [Metrics](./pkg/update.go#L11) which includes AWS API call metrics. These can be registered with the provided `registry` if you want them
 included in the AWS scrape results. If you are using multiple instances of `registry` it might make more sense to register these metrics in the application using YACE as a library to better 

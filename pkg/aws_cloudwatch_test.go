@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDimensionsToCliString(t *testing.T) {
@@ -28,34 +29,36 @@ func TestDimensionsToCliString(t *testing.T) {
 
 // TestSortyByTimeStamp validates that sortByTimestamp() sorts in descending order.
 func TestSortyByTimeStamp(t *testing.T) {
-	cloudWatchDataPoints := make([]*cloudwatch.Datapoint, 3)
-	maxValue1 := float64(1)
-	maxValue2 := float64(2)
-	maxValue3 := float64(3)
+	dataPointMiddle := &cloudwatch.Datapoint{
+		Timestamp: aws.Time(time.Now().Add(time.Minute * 2 * -1)),
+		Maximum:   aws.Float64(2),
+	}
 
-	dataPointMiddle := &cloudwatch.Datapoint{}
-	twoMinutesAgo := time.Now().Add(time.Minute * 2 * -1)
-	dataPointMiddle.Timestamp = &twoMinutesAgo
-	dataPointMiddle.Maximum = &maxValue2
-	cloudWatchDataPoints[0] = dataPointMiddle
+	dataPointNewest := &cloudwatch.Datapoint{
+		Timestamp: aws.Time(time.Now().Add(time.Minute * -1)),
+		Maximum:   aws.Float64(1),
+	}
 
-	dataPointNewest := &cloudwatch.Datapoint{}
-	oneMinutesAgo := time.Now().Add(time.Minute * -1)
-	dataPointNewest.Timestamp = &oneMinutesAgo
-	dataPointNewest.Maximum = &maxValue1
-	cloudWatchDataPoints[1] = dataPointNewest
+	dataPointOldest := &cloudwatch.Datapoint{
+		Timestamp: aws.Time(time.Now().Add(time.Minute * 3 * -1)),
+		Maximum:   aws.Float64(3),
+	}
 
-	dataPointOldest := &cloudwatch.Datapoint{}
-	threeMinutesAgo := time.Now().Add(time.Minute * 3 * -1)
-	dataPointOldest.Timestamp = &threeMinutesAgo
-	dataPointOldest.Maximum = &maxValue3
-	cloudWatchDataPoints[2] = dataPointOldest
+	cloudWatchDataPoints := []*cloudwatch.Datapoint{
+		dataPointMiddle,
+		dataPointNewest,
+		dataPointOldest,
+	}
 
 	sortedDataPoints := sortByTimestamp(cloudWatchDataPoints)
 
-	equals(t, maxValue1, *sortedDataPoints[0].Maximum)
-	equals(t, maxValue2, *sortedDataPoints[1].Maximum)
-	equals(t, maxValue3, *sortedDataPoints[2].Maximum)
+	expectedDataPoints := []*cloudwatch.Datapoint{
+		dataPointNewest,
+		dataPointMiddle,
+		dataPointOldest,
+	}
+
+	require.Equal(t, expectedDataPoints, sortedDataPoints)
 }
 
 func TestCreatePrometheusLabels(t *testing.T) {
@@ -167,21 +170,75 @@ func TestCreatePrometheusLabels(t *testing.T) {
 
 func Test_getFilteredMetricDatas(t *testing.T) {
 	type args struct {
-		region           string
-		accountId        *string
-		namespace        string
-		customTags       []Tag
-		tagsOnMetrics    exportedTagsOnMetrics
-		dimensionRegexps []*string
-		resources        []*taggedResource
-		metricsList      []*cloudwatch.Metric
-		m                *Metric
+		region                    string
+		accountId                 *string
+		namespace                 string
+		customTags                []Tag
+		tagsOnMetrics             exportedTagsOnMetrics
+		dimensionRegexps          []*string
+		dimensionNameRequirements []string
+		resources                 []*taggedResource
+		metricsList               []*cloudwatch.Metric
+		m                         *Metric
 	}
 	tests := []struct {
 		name               string
 		args               args
 		wantGetMetricsData []cloudwatchData
 	}{
+		{
+			"dimensionwrongname",
+			args{
+				region:     "us-east-1",
+				accountId:  aws.String("123123123123"),
+				namespace:  "ec2",
+				customTags: nil,
+				tagsOnMetrics: map[string][]string{
+					"ec2": {
+						"Value1",
+						"Value2",
+					},
+				},
+				dimensionRegexps: SupportedServices.GetService("ec2").DimensionRegexps,
+				resources: []*taggedResource{
+					{
+						ARN: "arn:aws:ec2:us-east-1:123123123123:instance/i-12312312312312312",
+						Tags: []Tag{
+							{
+								Key:   "Name",
+								Value: "some-Node",
+							},
+						},
+						Namespace: "ec2",
+						Region:    "us-east-1",
+					},
+				},
+				metricsList: []*cloudwatch.Metric{
+					{
+						MetricName: aws.String("CPUUtilization"),
+						Dimensions: []*cloudwatch.Dimension{
+							{
+								Name:  aws.String("BadDimension"),
+								Value: aws.String("lol"),
+							},
+						},
+						Namespace: aws.String("AWS/EC2"),
+					},
+				},
+				m: &Metric{
+					Name: "CPUUtilization",
+					Statistics: []string{
+						"Average",
+					},
+					Period:                 60,
+					Length:                 600,
+					Delay:                  120,
+					NilToZero:              aws.Bool(false),
+					AddCloudwatchTimestamp: aws.Bool(false),
+				},
+			},
+			[]cloudwatchData{},
+		},
 		{
 			"ec2",
 			args{
@@ -348,10 +405,134 @@ func Test_getFilteredMetricDatas(t *testing.T) {
 				},
 			},
 		},
+		{
+			"alb",
+			args{
+				region:                    "us-east-1",
+				accountId:                 aws.String("123123123123"),
+				namespace:                 "alb",
+				customTags:                nil,
+				tagsOnMetrics:             nil,
+				dimensionRegexps:          SupportedServices.GetService("alb").DimensionRegexps,
+				dimensionNameRequirements: []string{"LoadBalancer", "TargetGroup"},
+				resources: []*taggedResource{
+					{
+						ARN: "arn:aws:elasticloadbalancing:us-east-1:123123123123:loadbalancer/app/some-ALB/0123456789012345",
+						Tags: []Tag{
+							{
+								Key:   "Name",
+								Value: "some-ALB",
+							},
+						},
+						Namespace: "alb",
+						Region:    "us-east-1",
+					},
+				},
+				metricsList: []*cloudwatch.Metric{
+					{
+						MetricName: aws.String("RequestCount"),
+						Dimensions: []*cloudwatch.Dimension{
+							{
+								Name:  aws.String("LoadBalancer"),
+								Value: aws.String("app/some-ALB/0123456789012345"),
+							},
+							{
+								Name:  aws.String("TargetGroup"),
+								Value: aws.String("targetgroup/some-ALB/9999666677773333"),
+							},
+							{
+								Name:  aws.String("AvailabilityZone"),
+								Value: aws.String("us-east-1"),
+							},
+						},
+						Namespace: aws.String("AWS/ApplicationELB"),
+					},
+					{
+						MetricName: aws.String("RequestCount"),
+						Dimensions: []*cloudwatch.Dimension{
+							{
+								Name:  aws.String("LoadBalancer"),
+								Value: aws.String("app/some-ALB/0123456789012345"),
+							},
+							{
+								Name:  aws.String("TargetGroup"),
+								Value: aws.String("targetgroup/some-ALB/9999666677773333"),
+							},
+						},
+						Namespace: aws.String("AWS/ApplicationELB"),
+					},
+					{
+						MetricName: aws.String("RequestCount"),
+						Dimensions: []*cloudwatch.Dimension{
+							{
+								Name:  aws.String("LoadBalancer"),
+								Value: aws.String("app/some-ALB/0123456789012345"),
+							},
+							{
+								Name:  aws.String("AvailabilityZone"),
+								Value: aws.String("us-east-1"),
+							},
+						},
+						Namespace: aws.String("AWS/ApplicationELB"),
+					},
+					{
+						MetricName: aws.String("RequestCount"),
+						Dimensions: []*cloudwatch.Dimension{
+							{
+								Name:  aws.String("LoadBalancer"),
+								Value: aws.String("app/some-ALB/0123456789012345"),
+							},
+						},
+						Namespace: aws.String("AWS/ApplicationELB"),
+					},
+				},
+				m: &Metric{
+					Name: "RequestCount",
+					Statistics: []string{
+						"Sum",
+					},
+					Period:                 60,
+					Length:                 600,
+					Delay:                  120,
+					NilToZero:              aws.Bool(false),
+					AddCloudwatchTimestamp: aws.Bool(false),
+				},
+			},
+			[]cloudwatchData{
+				{
+					AccountId:              aws.String("123123123123"),
+					AddCloudwatchTimestamp: aws.Bool(false),
+					Dimensions: []*cloudwatch.Dimension{
+						{
+							Name:  aws.String("LoadBalancer"),
+							Value: aws.String("app/some-ALB/0123456789012345"),
+						},
+						{
+							Name:  aws.String("TargetGroup"),
+							Value: aws.String("targetgroup/some-ALB/9999666677773333"),
+						},
+					},
+					ID:        aws.String("arn:aws:elasticloadbalancing:us-east-1:123123123123:loadbalancer/app/some-ALB/0123456789012345"),
+					Metric:    aws.String("RequestCount"),
+					Namespace: aws.String("alb"),
+					NilToZero: aws.Bool(false),
+					Period:    60,
+					Region:    aws.String("us-east-1"),
+					Statistics: []string{
+						"Sum",
+					},
+					Tags: []Tag{},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for i, got := range getFilteredMetricDatas(tt.args.region, tt.args.accountId, tt.args.namespace, tt.args.customTags, tt.args.tagsOnMetrics, tt.args.dimensionRegexps, tt.args.resources, tt.args.metricsList, tt.args.m) {
+			metricDatas := getFilteredMetricDatas(tt.args.region, tt.args.accountId, tt.args.namespace, tt.args.customTags, tt.args.tagsOnMetrics, tt.args.dimensionRegexps, tt.args.resources, tt.args.metricsList, tt.args.dimensionNameRequirements, tt.args.m)
+			if len(metricDatas) != len(tt.wantGetMetricsData) {
+				t.Errorf("len(getFilteredMetricDatas()) = %v, want %v", len(metricDatas), len(tt.wantGetMetricsData))
+			}
+			for i, got := range metricDatas {
 				if *got.AccountId != *tt.wantGetMetricsData[i].AccountId {
 					t.Errorf("getFilteredMetricDatas().AccountId = %v, want %v", *got.AccountId, *tt.wantGetMetricsData[i].AccountId)
 				}
@@ -438,7 +619,6 @@ func (mt StubClock) Now() time.Time {
 }
 
 func Test_MetricWindow(t *testing.T) {
-
 	type data struct {
 		roundingPeriod    time.Duration
 		length            time.Duration
@@ -472,7 +652,7 @@ func Test_MetricWindow(t *testing.T) {
 				length:         120 * time.Second,
 				delay:          120 * time.Second,
 				clock: StubClock{
-					currentTime: time.Date(2021, 1, 1, 0, 02, 22, 33, time.UTC),
+					currentTime: time.Date(2021, 1, 1, 0, 0o2, 22, 33, time.UTC),
 				},
 				expectedStartTime: time.Date(2020, 12, 31, 23, 58, 22, 33, time.UTC),
 				expectedEndTime:   time.Date(2021, 1, 1, 0, 0, 22, 33, time.UTC),
@@ -508,7 +688,6 @@ func Test_MetricWindow(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.testName, func(t *testing.T) {
-
 			startTime, endTime := determineGetMetricDataWindow(tc.data.clock, tc.data.roundingPeriod, tc.data.length, tc.data.delay)
 			if !startTime.Equal(tc.data.expectedStartTime) {
 				t.Errorf("start time incorrect. Expected: %s, Actual: %s", tc.data.expectedStartTime.Format(timeFormat), startTime.Format(timeFormat))

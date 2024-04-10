@@ -3,6 +3,7 @@ package exporter
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/databasemigrationservice"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/storagegateway"
 )
 
 type ResourceFunc func(context.Context, tagsInterface, *Job, string) ([]*taggedResource, error)
@@ -106,7 +108,8 @@ var (
 				})
 				for _, resource := range inputResources {
 					for i, gw := range output.Items {
-						if strings.Contains(resource.ARN, *gw.Id) {
+						searchString := regexp.MustCompile(fmt.Sprintf(".*apis/%s$", *gw.Id))
+						if searchString.MatchString(resource.ARN) {
 							r := resource
 							r.ARN = strings.ReplaceAll(resource.ARN, *gw.Id, *gw.Name)
 							outputResources = append(outputResources, r)
@@ -291,7 +294,7 @@ var (
 				aws.String("directconnect"),
 			},
 			DimensionRegexps: []*string{
-				aws.String("dxcon:(?P<ConnectionId>[^/]+)"),
+				aws.String(":dxcon/(?P<ConnectionId>[^/]+)"),
 			},
 		}, {
 			Namespace: "AWS/DynamoDB",
@@ -510,6 +513,15 @@ var (
 				aws.String(":function:(?P<FunctionName>[^/]+)"),
 			},
 		}, {
+			Namespace: "AWS/MediaTailor",
+			Alias:     "mediatailor",
+			ResourceFilters: []*string{
+				aws.String("mediatailor:playbackConfiguration"),
+			},
+			DimensionRegexps: []*string{
+				aws.String(":playbackConfiguration:(?P<ConfigurationName>[^/]+)"),
+			},
+		}, {
 			Namespace: "AWS/Neptune",
 			Alias:     "neptune",
 			ResourceFilters: []*string{
@@ -644,6 +656,50 @@ var (
 			},
 			DimensionRegexps: []*string{
 				aws.String("(?P<QueueName>[^:]+)$"),
+			},
+		}, {
+			Namespace: "AWS/StorageGateway",
+			Alias:     "storagegateway",
+			ResourceFilters: []*string{
+				aws.String("storagegateway"),
+			},
+			DimensionRegexps: []*string{
+				aws.String(":gateway/(?P<GatewayId>[^:]+)$"),
+				aws.String(":share/(?P<ShareId>[^:]+)$"),
+				aws.String("^(?P<GatewayId>[^:/]+)/(?P<GatewayName>[^:]+)$"),
+			},
+			ResourceFunc: func(ctx context.Context, iface tagsInterface, job *Job, region string) (resources []*taggedResource, err error) {
+				pageNum := 0
+				return resources, iface.storagegatewayClient.ListGatewaysPagesWithContext(ctx, &storagegateway.ListGatewaysInput{},
+					func(page *storagegateway.ListGatewaysOutput, more bool) bool {
+						pageNum++
+						storagegatewayAPICounter.Inc()
+
+						for _, gwa := range page.Gateways {
+							resource := taggedResource{
+								ARN:       fmt.Sprintf("%s/%s", *gwa.GatewayId, *gwa.GatewayName),
+								Namespace: job.Type,
+								Region:    region,
+							}
+
+							tagsRequest := &storagegateway.ListTagsForResourceInput{
+								ResourceARN: gwa.GatewayARN,
+							}
+							tagsResponse, _ := iface.storagegatewayClient.ListTagsForResource(tagsRequest)
+							storagegatewayAPICounter.Inc()
+
+							for _, t := range tagsResponse.Tags {
+								resource.Tags = append(resource.Tags, Tag{Key: *t.Key, Value: *t.Value})
+							}
+
+							if resource.filterThroughTags(job.SearchTags) {
+								resources = append(resources, &resource)
+							}
+						}
+
+						return pageNum < 100
+					},
+				)
 			},
 		}, {
 			Namespace: "AWS/TransitGateway",
